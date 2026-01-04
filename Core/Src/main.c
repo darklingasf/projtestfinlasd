@@ -1,110 +1,99 @@
-#include "stm32f4xx.h"
-#include <stdio.h>
-#include <math.h>
-
-// Driver Includes
-#include "adxl345.h"
-#include "ssd1306.h"
-#include "ssd1306_fonts.h"
-#include "i2c_dma.h"
+#include "stm32f411xe.h"
 #include "uart.h"
+#include "spi.h"
+#include "adxl345.h"
+#include "exti.h"
 #include "tim.h"
+#include "log.h"
+#include "ssd1306.h"
+#include <math.h>
+#include <stdio.h>
+#include "log.h"
 
-// --- Global Flags & Buffers ---
+/* Flags from ISRs */
+extern volatile uint8_t oled_update_flag;
+extern volatile uint8_t adxl_int_flag;
+volatile uint8_t oled_frozen = 0;
 volatile uint8_t shock_detected = 0;
-volatile uint32_t shock_counter = 0;
-char display_buffer[32];
 
-// --- Function Prototypes ---
-void Process_Orientation(void);
-void System_Init(void);
+static void compute_angles(int16_t ax, int16_t ay, int16_t az,
+                            float *pitch, float *roll)
+{
+    float fax = (float)ax;
+    float fay = (float)ay;
+    float faz = (float)az;
 
-int main(void) {
-    System_Init();
-
-    UART2_SendString("System Booted: Monitoring Active\r\n");
-
-    while (1) {
-        // 1. Preparation
-        SSD1306_Clear();
-
-        // 2. Header
-        SSD1306_PrintLabel(0, 30, "--- MONITORING ---");
-
-        // 3. Sensor & Display Logic
-        Process_Orientation();
-
-        // 4. Shock Alert Logic (Triggered by EXTI)
-        if (shock_detected) {
-            SSD1306_PrintLabel(6, 15, "!! SHOCK DETECTED !!");
-
-            // Hold message for ~3 seconds based on loop speed
-            if (shock_counter > 0) {
-                shock_counter--;
-            } else {
-                shock_detected = 0;
-            }
-        }
-
-        // 5. Update Screen via I2C DMA
-        SSD1306_Update();
-
-        // 6. Loop Timing (Approx 20Hz refresh)
-        delay_ms(50);
-    }
+    *roll  = atan2f(fay, faz) * 57.2958f;
+    *pitch = atan2f(-fax, sqrtf(fay*fay + faz*faz)) * 57.2958f;
 }
 
-/**
- * @brief Initializes all user-defined modules
- */
-void System_Init(void) {
-    // Basic MCU / Timer Init
-    TIM2_Init();
-    UART2_Init();
+int main(void)
+{
+    /* ---------- INIT ---------- */
+    uart_init();
+    uart_send_string("System ready\r\n");
 
-    // I2C & OLED Init
-    I2C1_DMA_Init();
+    spi_gpio_init();
+    spi1_config();
+    adxl_init();
+    adxl_enable_activity_interrupt(16);
+
+    adxl_exti_init();
+    tim2_init();
+    tim2_start();
+
     SSD1306_Init();
 
-    // Accelerometer Init (Including EXTI config inside)
-    ADXL345_Init();
-}
+    uart_send_string("Init complete\r\n");
 
-/**
- * @brief Reads ADXL345, calculates angles, and updates display buffer
- */
-void Process_Orientation(void) {
-    int16_t x, y, z;
-    float pitch, roll;
+    /* ---------- MAIN LOOP ---------- */
+    while (1)
+    {
+        uart_process();
 
-    // Use your ADXL driver to get raw data
-    ADXL345_ReadAccel(&x, &y, &z);
+        /* Periodic sampling (TIM sets oled_update_flag) */
+        if (oled_update_flag)
+        {
+            oled_update_flag = 0;
 
-    // Standard Pitch & Roll calculation
-    // Pitch: Rotation around X-axis
-    // Roll:  Rotation around Y-axis
-    pitch = atan2f((float)y, (float)z) * 57.2958f;
-    roll  = atan2f(-(float)x, sqrtf((float)y * y + (float)z * z)) * 57.2958f;
+            int16_t ax, ay, az;
+            float pitch, roll;
+            char line[20];
 
-    // Print to OLED Buffer
-    sprintf(display_buffer, "PITCH: %+06.1f", pitch);
-    SSD1306_PrintLabel(2, 10, display_buffer);
+            adxl_read_xyz(&ax, &ay, &az);
 
-    sprintf(display_buffer, "ROLL:  %+06.1f", roll);
-    SSD1306_PrintLabel(4, 10, display_buffer);
-}
+            /* ALWAYS log raw data */
+            log_add(ax, ay, az);
 
-/**
- * @brief EXTI Interrupt Handler for ADXL345 INT1
- * Ensure this matches the pin you connected (e.g., EXTI0 for Pin 0)
- */
-void EXTI0_IRQHandler(void) {
-    if (EXTI->PR & EXTI_PR_PR0) {
-        EXTI->PR |= EXTI_PR_PR0; // Clear Pending Bit
+            /* If shock happened → freeze OLED */
+            if (shock_detected)
+            {
+                shock_detected = 0;
+                oled_frozen = 1;
 
-        shock_detected = 1;
-        shock_counter = 60; // 60 iterations * 50ms = 3 seconds
+                SSD1306_Clear();
+                SSD1306_PrintLabel(2, 0, "SHOCK");
+                SSD1306_PrintLabel(4, 0, "DETECTED");
+                SSD1306_Update();
+            }
 
-        UART2_SendString("ALERT: Physical Shock Sensed!\r\n");
+            /* Normal OLED update */
+            if (!oled_frozen)
+            {
+                compute_angles(ax, ay, az, &pitch, &roll);
+
+                SSD1306_Clear();
+
+                SSD1306_PrintLabel(0, 0, "MONITORING");
+
+                snprintf(line, sizeof(line), "PITCH: %.1f", pitch);
+                SSD1306_PrintLabel(2, 0, line);
+
+                snprintf(line, sizeof(line), "ROLL : %.1f", roll);
+                SSD1306_PrintLabel(4, 0, line);
+
+                SSD1306_Update();
+            }
+        }
     }
 }

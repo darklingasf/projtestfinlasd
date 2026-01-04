@@ -1,25 +1,63 @@
 #include "tim.h"
+#include "adxl345.h"
+#include "log.h"
+#include <stdint.h>
 
-/**
- * @brief Simple software delay
- * Note: For 16MHz HSI, 3195 is an approximate multiplier for 1ms.
+volatile uint8_t oled_update_flag = 0;
+
+/*
+ * TIM2 @ 20 Hz
+ * SYSCLK = 16 MHz
  */
-void delay_ms(uint32_t ms) {
-    for (volatile uint32_t i = 0; i < ms * 3195; i++) {
-        __NOP(); // No Operation: prevents compiler from optimizing out the loop
-    }
+
+
+void tim2_init(void)
+{
+    /* Enable TIM2 clock */
+    RCC->APB1ENR |= (1U << 0);
+
+    /* Disable timer during setup */
+    TIM2->CR1 &= ~(1U << 0);
+
+    /*
+     * Timer clock = 16 MHz
+     * Prescaler = 1600 → 10 kHz
+     */
+    TIM2->PSC = 1600 - 1;
+
+    /*
+     * Auto-reload = 500 → 50 ms → 20 Hz
+     */
+    TIM2->ARR = 500 - 1;
+
+    TIM2->CNT = 0;
+
+    /* Enable update interrupt */
+    TIM2->DIER |= (1U << 0);
+
+    /* Enable TIM2 IRQ */
+    NVIC_EnableIRQ(TIM2_IRQn);
 }
 
-/**
- * @brief Optional: Initialize TIM2 for hardware-based timing
- * Useful if you want to implement Requirement R4 (5-second logging) precisely.
- */
-void TIM2_Init(void) {
-    RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
+void tim2_start(void)
+{
+    TIM2->CNT = 0;
+    TIM2->CR1 |= (1U << 0);   // CEN
+}
 
-    // Set for 1ms update at 16MHz
-    TIM2->PSC = 16000 - 1;
-    TIM2->ARR = 1000 - 1;
+void tim2_stop(void)
+{
+    TIM2->CR1 &= ~(1U << 0);  // CEN = 0
+}
 
-    TIM2->CR1 |= TIM_CR1_CEN;
+/* ---------- TIM2 ISR ---------- */
+volatile uint8_t tim2_flag = 0;
+
+void TIM2_IRQHandler(void)
+{
+    if (TIM2->SR & TIM_SR_UIF)
+    {
+        TIM2->SR &= ~TIM_SR_UIF;
+        tim2_flag = 1;
+    }
 }

@@ -9,9 +9,8 @@
 static uint8_t SSD1306_Buffer[1024];
 
 void SSD1306_Init(void) {
-    UART2_SendString("OLED: Starting Init...\r\n");
+	uart_send_string("OLED: Starting Init...\r\n");
     I2C1_DMA_Init();
-    delay_ms(200);
 
     uint8_t init_cmds[] = {
         0xAE,       // Display Off
@@ -39,7 +38,7 @@ void SSD1306_Init(void) {
 
     SSD1306_Clear();
     SSD1306_Update();
-    UART2_SendString("OLED: Init Sequence Complete.\r\n");
+    uart_send_string("OLED: Init Sequence Complete.\r\n");
 }
 
 void SSD1306_Clear(void) {

@@ -3,8 +3,14 @@
 
 #include <stdint.h>
 
-void UART2_Init(void);
-void UART2_SendString(char* str);
-uint8_t UART2_GetCommand(char* buffer);
+/* ================= PUBLIC API ================= */
+void uart_init(void);
+void uart_send_char(char c);
+void uart_send_string(const char *str);
+void uart_process(void);         // Call in main loop
 
-#endif
+/* ========== Weak hooks for custom behavior ========= */
+void uart_cmd_set_thresh(uint16_t value);
+void uart_cmd_get_log(void);
+
+#endif /* UART_H */

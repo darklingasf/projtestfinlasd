@@ -1,13 +1,13 @@
-#ifndef EXTI_H
-#define EXTI_H
+#ifndef EXTI_H_
+#define EXTI_H_
 
 #include "stm32f4xx.h"
+#include <stdint.h>
 
-// Connect ADXL INT1 to PB0
-#define ADXL_INT_PIN 0
+/* Global flag set by EXTI interrupt */
+extern volatile uint8_t adxl_int_flag;
 
-void EXTI_Init(void);
-uint8_t EXTI_GetFlag(void);
-void EXTI_ClearFlag(void);
+/* Initialize EXTI for ADXL345 INT1 */
+void adxl_exti_init(void);
 
-#endif
+#endif /* EXTI_H_ */

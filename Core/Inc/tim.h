@@ -1,10 +1,14 @@
-#ifndef TIM_H
-#define TIM_H
+#ifndef TIM_H_
+#define TIM_H_
 
 #include "stm32f4xx.h"
+#include <stdint.h>
 
-void TIM2_Init(void); // 1ms base timer
-void delay_ms(uint32_t ms);
-uint32_t HAL_GetTick(void);
+/* Initialize TIM2 for 20 Hz sampling */
+void tim2_init(void);
 
-#endif
+/* Enable / disable sampling timer */
+void tim2_start(void);
+void tim2_stop(void);
+
+#endif /* TIM_H_ */
