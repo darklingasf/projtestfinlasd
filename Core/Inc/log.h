@@ -1,33 +1,25 @@
-#ifndef LOG_H
-#define LOG_H
+#ifndef LOG_H_
+#define LOG_H_
 
 #include <stdint.h>
 #include <stdbool.h>
 
-/* ===== Configuration ===== */
-#define LOG_BUF_SIZE 100   // Required by spec
+#define LOG_BUF_SIZE 100
 
-/* ===== Data Type ===== */
-typedef struct {
+typedef struct
+{
     int16_t ax;
     int16_t ay;
     int16_t az;
 } log_sample_t;
 
-/* ===== API ===== */
-
-/* Reset buffer and prepare for new capture */
+/* API */
 void log_start_capture(void);
-
-/* Add one sample (called at 20 Hz) */
 void log_add(int16_t ax, int16_t ay, int16_t az);
-
-/* Status queries */
 bool log_is_active(void);
 bool log_is_complete(void);
-
-/* Access for UART */
 const log_sample_t* log_get_buffer(void);
 uint16_t log_get_count(void);
+void log_reset(void);
 
-#endif /* LOG_H */
+#endif /* LOG_H_ */

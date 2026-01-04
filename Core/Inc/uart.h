@@ -12,5 +12,6 @@ void uart_process(void);         // Call in main loop
 /* ========== Weak hooks for custom behavior ========= */
 void uart_cmd_set_thresh(uint16_t value);
 void uart_cmd_get_log(void);
+extern volatile uint8_t uart_get_log_received;
 
 #endif /* UART_H */

@@ -15,6 +15,10 @@
 static volatile char rx_buf[RX_BUF_SIZE];
 static volatile uint8_t rx_idx = 0;
 static volatile uint8_t cmd_ready = 0;
+volatile uint8_t uart_get_log_received = 0;
+extern volatile uint8_t capture_armed;
+extern volatile uint8_t oled_frozen;
+extern void oled_show_monitoring(void);  // for resetting OLED
 
 /* ================= LOW LEVEL INIT ================= */
 static void gpio_uart_init(void)
@@ -109,7 +113,8 @@ void uart_process(void)
     /* ---- GET_LOG ---- */
     else if (strcmp((char*)rx_buf, "GET_LOG") == 0)
     {
-        uart_cmd_get_log();
+        uart_get_log_received = 1;      // flag for main loop
+        uart_cmd_get_log();              // send log and handle END_LOG rearm
     }
     else
     {
@@ -137,9 +142,18 @@ __attribute__((weak)) void uart_cmd_get_log(void)
         snprintf(line, sizeof(line), "%d,%d,%d\r\n",
                  buf[i].ax, buf[i].ay, buf[i].az);
         uart_send_string(line);
-
     }
 
     uart_send_string("END_LOG\r\n");
 
+    /* ----- REARM SYSTEM AFTER LOG ----- */
+    log_reset();                  // clear log buffer
+    capture_armed = 1;            // allow new shock
+    EXTI->IMR |= (1U << 8);       // re-enable ADXL345 interrupt
+    oled_frozen = 0;              // unfreeze OLED
+    // optional: restore default monitoring display
+    extern void oled_show_monitoring(void);
+    oled_show_monitoring();
+
+    uart_send_string("LOG COMPLETED, EXTI REARMED, OLED RESET\r\n");
 }

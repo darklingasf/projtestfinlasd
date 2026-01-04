@@ -8,16 +8,19 @@
 #include "ssd1306.h"
 #include <math.h>
 #include <stdio.h>
-#include "log.h"
 
-/* Flags from ISRs */
+/* -------- ISR FLAGS -------- */
 extern volatile uint8_t oled_update_flag;
-extern volatile uint8_t adxl_int_flag;
-volatile uint8_t oled_frozen = 0;
-volatile uint8_t shock_detected = 0;
+extern volatile uint8_t uart_get_log_received;
 
+/* -------- SYSTEM STATE -------- */
+volatile uint8_t shock_detected = 0;
+volatile uint8_t oled_frozen       = 0;
+volatile uint8_t capture_armed     = 1;
+
+/* -------- ANGLE MATH -------- */
 static void compute_angles(int16_t ax, int16_t ay, int16_t az,
-                            float *pitch, float *roll)
+                           float *pitch, float *roll)
 {
     float fax = (float)ax;
     float fay = (float)ay;
@@ -27,6 +30,23 @@ static void compute_angles(int16_t ax, int16_t ay, int16_t az,
     *pitch = atan2f(-fax, sqrtf(fay*fay + faz*faz)) * 57.2958f;
 }
 
+/* -------- OLED DISPLAY -------- */
+void oled_show_monitoring(void)
+{
+    SSD1306_Clear();
+    SSD1306_PrintLabel(0, 0, "MONITORING");
+    SSD1306_Update();
+}
+
+static void oled_show_shock(void)
+{
+    SSD1306_Clear();
+    SSD1306_PrintLabel(2, 0, "SHOCK");
+    SSD1306_PrintLabel(4, 0, "DETECTED");
+    SSD1306_Update();
+}
+
+/* -------- MAIN LOOP -------- */
 int main(void)
 {
     /* ---------- INIT ---------- */
@@ -43,57 +63,97 @@ int main(void)
     tim2_start();
 
     SSD1306_Init();
+    oled_show_monitoring();
 
     uart_send_string("Init complete\r\n");
 
-    /* ---------- MAIN LOOP ---------- */
     while (1)
     {
         uart_process();
 
-        /* Periodic sampling (TIM sets oled_update_flag) */
-        if (oled_update_flag)
+        /* ---------- GET_LOG ---------- */
+        if (uart_get_log_received)
         {
-            oled_update_flag = 0;
+            uart_get_log_received = 0;
 
-            int16_t ax, ay, az;
-            float pitch, roll;
-            char line[20];
+            // Dump log buffer over UART
+            const log_sample_t* buf = log_get_buffer();
+            uint16_t count = log_get_count();
+            for (uint16_t i = 0; i < count; i++)
+            {
+                char msg[50];
+                snprintf(msg, sizeof(msg), "%d,%d,%d\r\n",
+                         buf[i].ax, buf[i].ay, buf[i].az);
+                uart_send_string(msg);
+            }
 
-            adxl_read_xyz(&ax, &ay, &az);
+            uart_send_string("END_LOG\r\n");
 
-            /* ALWAYS log raw data */
+            // Reset log buffer and rearm EXTI
+            log_reset();
+            capture_armed = 1;
+            EXTI->IMR |= (1U << 8);
+
+            // Unfreeze OLED and show monitoring screen
+            oled_frozen = 0;
+            oled_show_monitoring();
+
+            uart_send_string("LOG CLEARED, EXTI REARMED\r\n");
+        }
+
+        /* ---------- PERIODIC SAMPLE ---------- */
+        if (!oled_update_flag)
+            continue;
+        oled_update_flag = 0;
+
+        int16_t ax, ay, az;
+        float pitch, roll;
+        adxl_read_xyz(&ax, &ay, &az);
+
+        /* ---------- ACTIVE LOGGING ---------- */
+        if (log_is_active())
+        {
             log_add(ax, ay, az);
 
-            /* If shock happened → freeze OLED */
-            if (shock_detected)
-            {
-                shock_detected = 0;
-                oled_frozen = 1;
+            if (log_is_complete())
+                uart_send_string("LOG FINISHED\r\n");
 
-                SSD1306_Clear();
-                SSD1306_PrintLabel(2, 0, "SHOCK");
-                SSD1306_PrintLabel(4, 0, "DETECTED");
-                SSD1306_Update();
-            }
+            continue; // OLED frozen while logging
+        }
 
-            /* Normal OLED update */
-            if (!oled_frozen)
-            {
-                compute_angles(ax, ay, az, &pitch, &roll);
+        /* ---------- SHOCK DETECTED ---------- */
+        if (shock_detected && capture_armed)
+        {
+            shock_detected = 0;
+            capture_armed  = 0;
+            oled_frozen    = 1;
 
-                SSD1306_Clear();
+            log_start_capture();
+            uart_send_string("LOG STARTED\r\n");
 
-                SSD1306_PrintLabel(0, 0, "MONITORING");
+            // Disable EXTI until GET_LOG
+            EXTI->IMR &= ~(1U << 8);
 
-                snprintf(line, sizeof(line), "PITCH: %.1f", pitch);
-                SSD1306_PrintLabel(2, 0, line);
+            oled_show_shock();  // <-- now OLED will show shock detected
+            continue;
+        }
 
-                snprintf(line, sizeof(line), "ROLL : %.1f", roll);
-                SSD1306_PrintLabel(4, 0, line);
+        /* ---------- NORMAL MONITORING MODE ---------- */
+        if (!oled_frozen)
+        {
+            compute_angles(ax, ay, az, &pitch, &roll);
 
-                SSD1306_Update();
-            }
+            SSD1306_Clear();
+            SSD1306_PrintLabel(0, 0, "MONITORING");
+
+            char line[32];
+            snprintf(line, sizeof(line), "PITCH: %5.1f", pitch);
+            SSD1306_PrintLabel(2, 0, line);
+
+            snprintf(line, sizeof(line), "ROLL : %5.1f", roll);
+            SSD1306_PrintLabel(4, 0, line);
+
+            SSD1306_Update();
         }
     }
 }
