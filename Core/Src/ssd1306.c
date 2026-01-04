@@ -1,150 +1,113 @@
-#include "ssd1306.h"
-#include <string.h>
-
-/* ================= Framebuffer ================= */
-uint8_t ssd1306_buffer[SSD1306_WIDTH * SSD1306_PAGES];
-
-/* ================= 6x8 Font ================= */
-const uint8_t Font6x8[][6] = {
-    /* ASCII 32-127 */
-    {0,0,0,0,0,0}, // space
-    {0x00,0x00,0x5F,0x00,0x00,0x00}, // !
-    // ... fill rest as needed
-};
-
-/* ================= Low-level commands ================= */
-static void ssd1306_send_command(uint8_t cmd)
-{
-    uint8_t buf[2] = {0x00, cmd}; // 0x00 = command
-    i2c_dma_send(buf, 2);
-    while(!i2c_dma_ready());
-}
-
-/* ================= Initialization ================= */
-void ssd1306_init(void)
-{
-    i2c_dma_init();
-    memset(ssd1306_buffer, 0x00, sizeof(ssd1306_buffer));
-
-    ssd1306_send_command(0xAE); // display off
-    ssd1306_send_command(0x20); // memory addressing mode
-    ssd1306_send_command(0x00); // horizontal addressing
-    ssd1306_send_command(0xB0); // page start 0
-    ssd1306_send_command(0xC8); // COM scan dec
-    ssd1306_send_command(0x00); // low column
-    ssd1306_send_command(0x10); // high column
-    ssd1306_send_command(0x40); // start line 0
-    ssd1306_send_command(0x81); // contrast
-    ssd1306_send_command(0x7F);
-    ssd1306_send_command(0xA1); // seg remap
-    ssd1306_send_command(0xA6); // normal display
-    ssd1306_send_command(0xA8); // multiplex
-    ssd1306_send_command(0x3F);
-    ssd1306_send_command(0xA4); // display all on resume
-    ssd1306_send_command(0xD3); // display offset
-    ssd1306_send_command(0x00);
-    ssd1306_send_command(0xD5); // display clock
-    ssd1306_send_command(0xF0);
-    ssd1306_send_command(0xD9); // precharge
-    ssd1306_send_command(0x22);
-    ssd1306_send_command(0xDA); // COM pins
-    ssd1306_send_command(0x12);
-    ssd1306_send_command(0xDB); // VCOM detect
-    ssd1306_send_command(0x20);
-    ssd1306_send_command(0x8D); // charge pump
-    ssd1306_send_command(0x14);
-    ssd1306_send_command(0xAF); // display on
-}
-
+#include "stm32f4xx.h"
 #include "ssd1306.h"
 #include "i2c_dma.h"
+#include "ssd1306_fonts.h"
+#include "uart.h"
+#include "tim.h"
 #include <string.h>
-#include <stdio.h>
 
-/* ================= Cursor ================= */
-static uint8_t cursor_x = 0;
-static uint8_t cursor_page = 0;
+static uint8_t SSD1306_Buffer[1024];
 
-/* Set the current cursor position */
-void ssd1306_set_cursor(uint8_t x, uint8_t page)
-{
-    if(x >= SSD1306_WIDTH) x = SSD1306_WIDTH - 1;
-    if(page >= SSD1306_PAGES) page = SSD1306_PAGES - 1;
+void SSD1306_Init(void) {
+    UART2_SendString("OLED: Starting Init...\r\n");
+    I2C1_DMA_Init();
+    delay_ms(200);
 
-    cursor_x = x;
-    cursor_page = page;
-}
+    uint8_t init_cmds[] = {
+        0xAE,       // Display Off
+        0xD5, 0x80, // Set Clock Divide Ratio
+        0xA8, 0x3F, // Multiplex Ratio
+        0xD3, 0x00, // Display Offset
+        0x40,       // Start Line
+        0x8D, 0x14, // Charge Pump (Enable)
+        0x20, 0x00, // Horizontal Addressing
+        0xA1,       // Segment Remap
+        0xC8,       // COM Scan Direction
+        0xDA, 0x12, // COM Pins hardware config
+        0x81, 0x7F, // Contrast (Reduced to 0x7F to lower power draw during test)
+        0xD9, 0x22, // Pre-charge (Standard 0x22)
+        0xDB, 0x20, // VCOMH Deselect level
+        0xA4,       // Resume RAM to display
+        0xA6,       // Normal Display (not inverted)
+        0xAF        // Display ON
+    };
 
-/* ================= Drawing ================= */
-
-/* Draw a single 6x8 character at the current cursor */
-void ssd1306_draw_char(char c)
-{
-    if(c < 32 || c > 127) c = '?';  // fallback for unsupported chars
-
-    const uint8_t *p = Font6x8[c - 32];
-
-    for(uint8_t i = 0; i < 6; i++)
-    {
-        uint16_t index = cursor_page * SSD1306_WIDTH + cursor_x;
-        if(index < SSD1306_WIDTH * SSD1306_PAGES)
-            ssd1306_buffer[index] = p[i];
-
-        cursor_x++;
-        if(cursor_x >= SSD1306_WIDTH)
-        {
-            cursor_x = 0;
-            cursor_page++;
-            if(cursor_page >= SSD1306_PAGES) cursor_page = SSD1306_PAGES - 1;
-        }
+    for(int i = 0; i < sizeof(init_cmds); i++) {
+        I2C1_DMA_Write(SSD1306_ADDR, 0x00, &init_cmds[i], 1);
+        while(I2C1_IsBusy());
     }
+
+    SSD1306_Clear();
+    SSD1306_Update();
+    UART2_SendString("OLED: Init Sequence Complete.\r\n");
 }
 
-/* Draw a null-terminated string starting at current cursor */
-void ssd1306_draw_string(const char *str)
-{
-    while(*str) ssd1306_draw_char(*str++);
+void SSD1306_Clear(void) {
+    memset(SSD1306_Buffer, 0, 1024);
 }
 
-/* Clear the framebuffer and reset cursor */
-void ssd1306_clear(void)
-{
-    memset(ssd1306_buffer, 0, sizeof(ssd1306_buffer));
-    cursor_x = 0;
-    cursor_page = 0;
+void SSD1306_Update(void) {
+    // 1. Tell the OLED where we are writing (Manual/Blocking for stability)
+    uint8_t addr_cmds[] = {0x21, 0, 127, 0x22, 0, 7};
+    for(int i = 0; i < 6; i++) {
+        I2C1_DMA_Write(SSD1306_ADDR, 0x00, &addr_cmds[i], 1);
+        while(I2C1_IsBusy()); // Wait for each command to land
+    }
+
+    // 2. Blast the 1024 bytes of pixel data via DMA
+    // 0x40 is the 'Data' stream prefix
+    I2C1_DMA_Write(SSD1306_ADDR, 0x40, SSD1306_Buffer, 1024);
+
+    // IMPORTANT: Wait for DMA to finish before allowing the MCU to do anything else
+    // This prevents "tearing" or flickering.
+    while(I2C1_IsBusy());
 }
 
-/* ================= Update via DMA ================= */
-void ssd1306_update(void)
-{
-    uint8_t buf[SSD1306_WIDTH * SSD1306_PAGES + 1];
-    buf[0] = 0x40; // Control byte for data
-    memcpy(&buf[1], ssd1306_buffer, SSD1306_WIDTH * SSD1306_PAGES);
-    i2c_dma_send(buf, SSD1306_WIDTH * SSD1306_PAGES + 1);
-}
+// THE FUNCTION THAT WAS CAUSING THE ERROR:
+void SSD1306_PrintLabel(uint8_t page, uint8_t col, char* str) {
+    uint8_t start_col = col;
 
-/* ================= High-level helpers ================= */
+    while(*str && col < 128) {  // Check against screen width (128 columns)
+        // Check ASCII range
+        if (*str < 32 || *str > 126) {
+            str++;
+            continue;
+        }
 
-/* Show monitoring screen with pitch and roll */
-void ssd1306_show_monitoring(int16_t pitch, int16_t roll)
-{
-    ssd1306_clear();
-    ssd1306_set_cursor(0, 0);
-    ssd1306_draw_string("MONITORING");
+        // Calculate character index (0-94 for ASCII 32-126)
+        uint8_t char_index = (*str - 32);
 
-    char line[20];
-    snprintf(line, sizeof(line), "P:%d R:%d", pitch, roll);
-    ssd1306_set_cursor(0, 2);
-    ssd1306_draw_string(line);
+        // Make sure we don't overflow the font array
+        if (char_index > 94) {
+            str++;
+            continue;
+        }
 
-    ssd1306_update();
-}
+        // Calculate pointer to character data
+        const uint8_t *char_ptr = &Font5x7[char_index * 5];
 
-/* Show shock detected screen */
-void ssd1306_show_shock_detected(void)
-{
-    ssd1306_clear();
-    ssd1306_set_cursor(0, 3);
-    ssd1306_draw_string("SHOCK DETECTED!");
-    ssd1306_update();
-}
+        // Draw the character (5 columns)
+        for(int i = 0; i < 5; i++) {
+            // Check if we're still within screen bounds
+            if (col + i >= 128) break;
+
+            uint32_t buf_idx = (page * 128) + col + i;
+            if (buf_idx < 1024) {
+                SSD1306_Buffer[buf_idx] = char_ptr[i];
+            }
+        }
+
+        // Add 1px gap between characters
+        col += 5;  // Move past the 5 columns we just wrote
+
+        if (col < 128) {
+            uint32_t gap_idx = (page * 128) + col;
+            if (gap_idx < 1024) {
+                SSD1306_Buffer[gap_idx] = 0x00;
+            }
+            col += 1;  // Add the gap column
+        }
+
+        str++;
+    }
+    }

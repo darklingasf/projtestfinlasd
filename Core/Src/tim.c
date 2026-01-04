@@ -1,77 +1,25 @@
 #include "tim.h"
-#include "adxl345.h"
-#include "log.h"
 
-/*
- * TIM2 @ 20 Hz
- * SYSCLK = 16 MHz
+/**
+ * @brief Simple software delay
+ * Note: For 16MHz HSI, 3195 is an approximate multiplier for 1ms.
  */
-
-void tim2_init(void)
-{
-    /* Enable TIM2 clock */
-    RCC->APB1ENR |= (1U << 0);
-
-    /* Disable timer during setup */
-    TIM2->CR1 &= ~(1U << 0);
-
-    /*
-     * Timer clock = 16 MHz
-     * Prescaler = 1600 → 10 kHz
-     */
-    TIM2->PSC = 1600 - 1;
-
-    /*
-     * Auto-reload = 500 → 50 ms → 20 Hz
-     */
-    TIM2->ARR = 500 - 1;
-
-    /* Reset counter */
-    TIM2->CNT = 0;
-
-    /* Enable update interrupt */
-    TIM2->DIER |= (1U << 0);
-
-    /* Enable TIM2 interrupt */
-    NVIC_EnableIRQ(TIM2_IRQn);
-}
-
-void tim2_start(void)
-{
-    TIM2->CNT = 0;
-    TIM2->CR1 |= (1U << 0);   // CEN
-}
-
-void tim2_stop(void)
-{
-    TIM2->CR1 &= ~(1U << 0);
-}
-
-/* ---------- TIM2 ISR ---------- */
-void TIM2_IRQHandler(void)
-{
-    if (TIM2->SR & (1U << 0))   // UIF
-    {
-        /* Clear update flag */
-        TIM2->SR &= ~(1U << 0);
-
-        if (!log_is_active())
-        {
-            tim2_stop();
-            return;
-        }
-
-        int16_t ax, ay, az;
-
-        /* Fast SPI burst */
-        adxl_read_xyz(&ax, &ay, &az);
-
-        log_add_sample(ax, ay, az);
-
-        /* Stop exactly at 100 samples */
-        if (log_is_complete())
-        {
-            tim2_stop();
-        }
+void delay_ms(uint32_t ms) {
+    for (volatile uint32_t i = 0; i < ms * 3195; i++) {
+        __NOP(); // No Operation: prevents compiler from optimizing out the loop
     }
+}
+
+/**
+ * @brief Optional: Initialize TIM2 for hardware-based timing
+ * Useful if you want to implement Requirement R4 (5-second logging) precisely.
+ */
+void TIM2_Init(void) {
+    RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
+
+    // Set for 1ms update at 16MHz
+    TIM2->PSC = 16000 - 1;
+    TIM2->ARR = 1000 - 1;
+
+    TIM2->CR1 |= TIM_CR1_CEN;
 }

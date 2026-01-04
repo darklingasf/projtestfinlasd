@@ -1,56 +1,41 @@
 #include "log.h"
+#include "uart.h"
+#include <stdio.h>
 
-/* ===== Internal State ===== */
+// Buffer to hold 100 samples (Requirement Mode 2)
+static LogEntry log_buffer[100];
+static uint16_t current_entry = 0;
 
-static log_sample_t log_buffer[LOG_BUF_SIZE];
-
-static volatile uint16_t write_index = 0;
-static volatile bool capture_active = false;
-static volatile bool capture_complete = false;
-
-/* ===== API Implementation ===== */
-
-void log_start_capture(void)
-{
-    write_index = 0;
-    capture_complete = false;
-    capture_active = true;
-}
-
-void log_add_sample(int16_t ax, int16_t ay, int16_t az)
-{
-    if (!capture_active)
-        return;
-
-    log_buffer[write_index].ax = ax;
-    log_buffer[write_index].ay = ay;
-    log_buffer[write_index].az = az;
-
-    write_index++;
-
-    if (write_index >= LOG_BUF_SIZE)
-    {
-        capture_active = false;
-        capture_complete = true;
+/**
+ * @brief Saves a single 3-axis sample into the RAM buffer
+ */
+void LOG_Write(int16_t x, int16_t y, int16_t z) {
+    if (current_entry < 100) {
+        log_buffer[current_entry].x = x;
+        log_buffer[current_entry].y = y;
+        log_buffer[current_entry].z = z;
+        current_entry++;
     }
 }
 
-bool log_is_active(void)
-{
-    return capture_active;
-}
+/**
+ * @brief Streams all stored data points via UART to the PC
+ * Requirement P4: UART Command Interface
+ */
+void LOG_StreamUART(void) {
+    char tx_msg[64];
 
-bool log_is_complete(void)
-{
-    return capture_complete;
-}
+    UART2_SendString("\r\n--- START OF LOG DATA ---\r\n");
 
-const log_sample_t* log_get_buffer(void)
-{
-    return log_buffer;
-}
+    for (uint16_t i = 0; i < current_entry; i++) {
+        // Format: "Index, X, Y, Z"
+        sprintf(tx_msg, "[%d] X:%d Y:%d Z:%d\r\n", i,
+                log_buffer[i].x, log_buffer[i].y, log_buffer[i].z);
+        UART2_SendString(tx_msg);
+    }
 
-uint16_t log_get_count(void)
-{
-    return write_index;
+    UART2_SendString("--- END OF LOG ---\r\n");
+
+    // Reset index for the next shock event
+    current_entry = 0;
 }
