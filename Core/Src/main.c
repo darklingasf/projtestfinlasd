@@ -9,6 +9,19 @@
 #include <math.h>
 #include <stdio.h>
 
+void debug_keep_alive_in_sleep(void)
+{
+    // DBGMCU_CR register controls debug behavior in low-power modes
+    // Bit 0 = DBG_SLEEP: Keep debug active during Sleep mode
+    // Bit 1 = DBG_STOP : Keep debug active during Stop mode (optional)
+    // Bit 2 = DBG_STANDBY: Keep debug active during Standby (optional)
+    DBGMCU->CR |= DBGMCU_CR_DBG_SLEEP;  // Always keep debug in Sleep
+
+    // Optional: keep debug in Stop and Standby if you use them
+    // DBGMCU->CR |= DBGMCU_CR_DBG_STOP;
+    // DBGMCU->CR |= DBGMCU_CR_DBG_STANDBY;
+}
+
 /* -------- ISR FLAGS -------- */
 extern volatile uint8_t oled_update_flag;
 extern volatile uint8_t uart_get_log_received;
@@ -46,9 +59,39 @@ static void oled_show_shock(void)
     SSD1306_Update();
 }
 
+void boot_delay_ms(uint32_t ms) {
+    // Configure SysTick for 1ms interrupts
+    SysTick->LOAD = 16000 - 1;  // 16MHz / 1000 = 16000 (for 1ms if running at 16MHz)
+    SysTick->VAL = 0;
+    SysTick->CTRL = SysTick_CTRL_ENABLE_Msk | SysTick_CTRL_CLKSOURCE_Msk;
+
+    for(uint32_t i = 0; i < ms; i++) {
+        // Wait until COUNTFLAG is set
+        while(!(SysTick->CTRL & SysTick_CTRL_COUNTFLAG_Msk));
+    }
+
+    SysTick->CTRL = 0;  // Disable SysTick
+}
+
 /* -------- MAIN LOOP -------- */
 int main(void)
 {
+
+    __disable_irq();  // Start with interrupts globally disabled
+
+    // All your initialization...
+
+    // Clear ALL pending interrupts
+    for(int i = 0; i < 8; i++) {
+        NVIC->ICER[i] = 0xFFFFFFFF;  // Disable all interrupts
+        NVIC->ICPR[i] = 0xFFFFFFFF;  // Clear all pending
+    }
+
+    // 1-second delay
+    for(volatile uint32_t i = 0; i < 16000000; i++);
+
+    // Now configure and enable your specific interrupt
+    __enable_irq();
     /* ---------- INIT ---------- */
     uart_init();
     uart_send_string("System ready\r\n");
@@ -147,13 +190,14 @@ int main(void)
             SSD1306_PrintLabel(0, 0, "MONITORING");
 
             char line[32];
-            snprintf(line, sizeof(line), "PITCH: %5.1f", pitch);
+            snprintf(line, sizeof(line), "PITCH: %5.1f degrees", pitch);
             SSD1306_PrintLabel(2, 0, line);
 
-            snprintf(line, sizeof(line), "ROLL : %5.1f", roll);
+            snprintf(line, sizeof(line), "ROLL : %5.1f degrees", roll);
             SSD1306_PrintLabel(4, 0, line);
 
             SSD1306_Update();
         }
+        __WFI();
     }
 }
